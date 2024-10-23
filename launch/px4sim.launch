@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<launch>
+	<include file="$(env HOME)/PX4-Autopilot/launch/mavros_posix_sitl.launch">
+	</include>
+
+	<node pkg="gazebo_px4_simulator" type="gazebo_px4_simulator.py" name="gazebo_px4_simulator" required="true" output="screen" /> 
+	
+
+<!-- <launch>
+
+    <include file="$(env HOME)/PX4-Autopilot/launch/mavros_posix_sitl.launch" />
+
+    <node pkg="offboard_py" type="px4_comms.py" name="px4_comms_node" output="screen" />
+
+    <node pkg="offboard_py" type="px4_trajectory.py" name="px4_trajectory_node" output="screen" launch-prefix="bash -c 'sleep 10; exec $0 $@'" /> -->
+
+</launch>
