@@ -7,6 +7,7 @@ import numpy as np
 from geometry_msgs.msg import PoseStamped, Twist
 from mavros_msgs.msg import State, PositionTarget
 from mavros_msgs.srv import CommandBool, CommandBoolRequest, SetMode, SetModeRequest
+from visualization_msgs.msg import Marker, MarkerArray
 import math
 import time
 
@@ -15,7 +16,6 @@ current_pose = PoseStamped()
 
 # Current target point
 tx, ty, tz, tyaw = 0, 0, 2, 0
-
 
 def state_cb(msg):
     global current_state
@@ -46,6 +46,8 @@ if __name__ == "__main__":
     pose_sub = rospy.Subscriber("mavros/local_position/pose", PoseStamped, callback=pose_cb)
     setpoint_pub = rospy.Publisher("mavros/setpoint_raw/local", PositionTarget, queue_size=10)
     velocity_pub = rospy.Publisher("mavros/setpoint_velocity/cmd_vel", Twist, queue_size=10)
+    marker_pub = rospy.Publisher("visualization_marker_array", MarkerArray, queue_size=10)  # Marker publisher
+    drone_marker_pub = rospy.Publisher("drone_position_marker", Marker, queue_size=10)  # Drone position marker publisher
 
     rospy.wait_for_service("/mavros/cmd/arming")
     arming_client = rospy.ServiceProxy("/mavros/cmd/arming", CommandBool)
@@ -64,7 +66,7 @@ if __name__ == "__main__":
     try:
         rospack = rospkg.RosPack()
         package_path = rospack.get_path('gazebo_px4_simulator')
-        csv_path = f"{package_path}/trajectories/trajectory.csv"
+        csv_path = f"{package_path}/trajectories/sin_trajectory.csv"
         with open(csv_path, 'r') as file:
             reader = csv.reader(file)
             for row in reader:
@@ -79,6 +81,93 @@ if __name__ == "__main__":
     if not trajectory:
         rospy.logerr("No valid waypoints found in CSV file!")
         exit(1)
+
+    # Publish markers for every 10th waypoint
+    markers = MarkerArray()
+    for i in range(0, len(trajectory), 10):  # Select every 10th waypoint
+        waypoint = trajectory[i]
+        marker = Marker()
+        marker.header.frame_id = "map"  # Reference frame (you may need to adjust)
+        marker.header.stamp = rospy.Time.now()
+        marker.ns = "waypoints"
+        marker.id = i
+        marker.type = Marker.SPHERE  # You can use different types such as CUBE, ARROW, etc.
+        marker.action = Marker.ADD
+
+        # Set the position of the marker
+        marker.pose.position.x = waypoint[0]
+        marker.pose.position.y = waypoint[1]
+        marker.pose.position.z = waypoint[2]
+
+        # Orientation (no specific rotation for a point)
+        marker.pose.orientation.x = 0.0
+        marker.pose.orientation.y = 0.0
+        marker.pose.orientation.z = 0.0
+        marker.pose.orientation.w = 1.0
+
+        # Marker scale (size of the sphere)
+        marker.scale.x = 0.3
+        marker.scale.y = 0.3
+        marker.scale.z = 0.3
+
+        # Marker color
+        marker.color.r = 0.0
+        marker.color.g = 1.0
+        marker.color.b = 0.0
+        marker.color.a = 1.0  # Transparency
+
+        markers.markers.append(marker)
+
+    # Continuously publish the markers to ensure they are visible in RViz/Gazebo
+    def publish_markers():
+        while not rospy.is_shutdown():
+            marker_pub.publish(markers)
+            rate.sleep()
+
+    # Start a separate thread to publish markers
+    import threading
+    marker_thread = threading.Thread(target=publish_markers)
+    marker_thread.start()
+
+    # Function to publish the drone position as a marker
+    def publish_drone_marker():
+        while not rospy.is_shutdown():
+            marker = Marker()
+            marker.header.frame_id = "map"  # Make sure this matches the RViz frame
+            marker.header.stamp = rospy.Time.now()
+            marker.ns = "drone"
+            marker.id = 0
+            marker.type = Marker.SPHERE
+            marker.action = Marker.ADD
+
+            # Set the position of the marker to the current drone position
+            marker.pose.position.x = current_pose.pose.position.x
+            marker.pose.position.y = current_pose.pose.position.y
+            marker.pose.position.z = current_pose.pose.position.z
+
+            # Orientation (no specific rotation for a point)
+            marker.pose.orientation.x = 0.0
+            marker.pose.orientation.y = 0.0
+            marker.pose.orientation.z = 0.0
+            marker.pose.orientation.w = 1.0
+
+            # Marker scale (size of the sphere)
+            marker.scale.x = 0.5
+            marker.scale.y = 0.5
+            marker.scale.z = 0.5
+
+            # Marker color
+            marker.color.r = 1.0
+            marker.color.g = 0.0
+            marker.color.b = 0.0
+            marker.color.a = 1.0  # Fully opaque
+
+            drone_marker_pub.publish(marker)
+            rate.sleep()
+
+    # Start a separate thread to publish the drone marker
+    drone_marker_thread = threading.Thread(target=publish_drone_marker)
+    drone_marker_thread.start()
 
     # Initial takeoff setpoint
     takeoff_pose = PositionTarget()
@@ -144,7 +233,7 @@ if __name__ == "__main__":
         setpoint_pub.publish(takeoff_pose)
         rate.sleep()
 
-    # Start waypoint navigation (using austin's constant vel)
+    # Start waypoint navigation
     waypoint_index = 0
     velocity_cmd = Twist()
     threshold_distance = 0.5  # Threshold to switch waypoints
@@ -189,7 +278,6 @@ if __name__ == "__main__":
         if distance_to_target < threshold_distance:
             rospy.loginfo(f"Reached waypoint {waypoint_index + 1} of {len(trajectory)}. Moving to next waypoint...")
             waypoint_index += 1
-
 
         rate.sleep()
 

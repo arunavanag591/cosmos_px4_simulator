@@ -20,3 +20,11 @@ Installation procedure:
     export GAZEBO_PLUGIN_PATH=$GAZEBO_PLUGIN_PATH:/usr/lib/x86_64-linux-gnu/gazebo-9/plugins
     ```
 
+6. To run:
+
+    ``` bash
+    cd ~/PX4-Autopilot/launch/
+    roslaunch roslaunch mavros_posix_sitl.launch
+    rosrun gazebo_px4_simulator gazebo_px4_simulator.py
+    ```
+    
