@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<launch>
+  <node name="plume_tracker" pkg="gazebo_px4_simulator" type="tracking_controller_node.py" output="screen">
+    <param name="bounds" value="[(0, 50), (-25, 25)]" />
+    <param name="start_pos" value="[8.0, 5.0]" />
+    <param name="target_pos" value="[0.0, 0.0]" />
+    <param name="target_weight" value="0.2" />
+    <param name="closest_to_source" value="1.0" />
+    <param name="plume_timeout" value="5.0" />
+  </node>
+  
+</launch>

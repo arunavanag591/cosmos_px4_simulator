@@ -10,14 +10,31 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   gazebo_ros
   geometry_msgs
+  message_generation
 )
 
 find_package(gazebo REQUIRED)
 find_package(Protobuf REQUIRED)
 
-## Declare catkin package
+# Add message files
+add_message_files(
+  FILES
+  OdorReading.msg
+)
+
+# Python setup must come before generate_messages
+catkin_python_setup()
+
+# Generate messages must come after catkin_python_setup but before catkin_package
+generate_messages(
+  DEPENDENCIES
+  std_msgs
+  geometry_msgs
+)
+
+## Declare catkin package after generate_messages
 catkin_package(
-  CATKIN_DEPENDS rospy roscpp geometry_msgs
+  CATKIN_DEPENDS rospy roscpp geometry_msgs message_runtime
 )
 
 ## Set include directories

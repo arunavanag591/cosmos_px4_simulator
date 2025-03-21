@@ -24,7 +24,11 @@ Installation procedure:
 
     ``` bash
     cd ~/PX4-Autopilot/launch/
-    roslaunch roslaunch mavros_posix_sitl.launch
+    roslaunch mavros_posix_sitl.launch
     rosrun gazebo_px4_simulator gazebo_px4_simulator.py
     ```
-    
+
+    For checking the wind plugin go to:
+    ``` bash
+    ~/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/worlds/empty.world
+    ```

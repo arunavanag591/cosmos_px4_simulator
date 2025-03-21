@@ -46,7 +46,7 @@ void WindPublisherPlugin::Load(physics::WorldPtr world, sdf::ElementPtr sdf) {
 
   // Connect to Gazebo's update event
   this->updateConnection = event::Events::ConnectWorldUpdateBegin(
-      std::bind(&WindPublisherPlugin::OnUpdate, this));bcampus.unr.edu/
+      std::bind(&WindPublisherPlugin::OnUpdate, this));
 }
 
 void WindPublisherPlugin::OnUpdate() {

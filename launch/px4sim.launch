@@ -1,17 +1,43 @@
 <?xml version="1.0"?>
 <launch>
+  <!-- Launch PX4 SITL with MAVROS -->
+  <include file="$(env HOME)/PX4-Autopilot/launch/mavros_posix_sitl.launch">
+  </include>
+  
+  <!-- Start odor simulator node -->
+  <node pkg="gazebo_px4_simulator" type="odor_simulator_node.py" name="odor_simulator" required="true" output="screen">
+    <param name="data_dir" value="$(find gazebo_px4_simulator)/odor_sim_assets/" />
+  </node>
+  
+  <!-- Start plume tracker node -->
+  <node pkg="your_package" type="tracking_controller_node.py" name="plume_tracker" required="true" output="screen">
+    <param name="bounds" value="[(0, 50), (-20, 20)]" />
+    <param name="start_pos" value="[5.0, 6.0]" />
+    <param name="target_pos" value="[0.0, 0.0]" />
+    <param name="target_weight" value="0.1" />
+    <param name="plume_timeout" value="10.0" />
+    <param name="closest_to_source" value="0.2" />
+  </node>
+  
+  <!-- Start modified Gazebo controller -->
+  <node pkg="gazebo_px4_simulator" type="offboard_px4_simulator.py" name="offboard_px4_simulator" required="true" output="screen" />
+</launch>
+
+
+<!--<?xml version="1.0"?>
+<launch>
 	<include file="$(env HOME)/PX4-Autopilot/launch/mavros_posix_sitl.launch">
 	</include>
 
 	<node pkg="gazebo_px4_simulator" type="gazebo_px4_simulator.py" name="gazebo_px4_simulator" required="true" output="screen" /> 
 	
 
-<!-- <launch>
+<launch>
 
     <include file="$(env HOME)/PX4-Autopilot/launch/mavros_posix_sitl.launch" />
 
     <node pkg="offboard_py" type="px4_comms.py" name="px4_comms_node" output="screen" />
 
-    <node pkg="offboard_py" type="px4_trajectory.py" name="px4_trajectory_node" output="screen" launch-prefix="bash -c 'sleep 10; exec $0 $@'" /> -->
+    <node pkg="offboard_py" type="px4_trajectory.py" name="px4_trajectory_node" output="screen" launch-prefix="bash -c 'sleep 10; exec $0 $@'" /> 
 
-</launch>
+</launch>-->
