@@ -20,15 +20,28 @@ Installation procedure:
     export GAZEBO_PLUGIN_PATH=$GAZEBO_PLUGIN_PATH:/usr/lib/x86_64-linux-gnu/gazebo-9/plugins
     ```
 
-6. To run:
+6. How to use?:
+    - To run it with CSV
+        ``` bash
+        cd ~/PX4-Autopilot/launch/
+        roslaunch mavros_posix_sitl.launch
+        rosrun gazebo_px4_simulator gazebo_px4_simulator.py
+        
+    - To run it with cosmos odor simulator
+        ``` bash
+        cd ~/PX4-Autopilot/launch/
+        roslaunch mavros_posix_sitl.launch
+        rosrun gazebo_px4_simulator offboard_px4_simulator.py
+        rosrun gazebo_px4_simulator tracking_controller_node.py
+        ```
+    - To visualize in rviz:
+        ``` bash
+        rosrun rviz rviz -d ~/gazebo_ws/src/gazebo_px4_simulator/launch/plume_tracking.rviz
 
-    ``` bash
-    cd ~/PX4-Autopilot/launch/
-    roslaunch mavros_posix_sitl.launch
-    rosrun gazebo_px4_simulator gazebo_px4_simulator.py
-    ```
+        rosrun gazebo_px4_simulator plume_viz_node.py _target_pos:="[0.0, 0.0, 2.0]" _odor_threshold:="4.5"
+        ```
 
-    For checking the wind plugin go to:
-    ``` bash
-    ~/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/worlds/empty.world
-    ```
+    - For checking the wind plugin go to:
+        ``` bash
+        ~/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/worlds/empty.world
+        ```

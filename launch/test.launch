@@ -1,12 +1,15 @@
 <?xml version="1.0"?>
 <launch>
-  <node name="plume_tracker" pkg="gazebo_px4_simulator" type="tracking_controller_node.py" output="screen">
-    <param name="bounds" value="[(0, 50), (-25, 25)]" />
-    <param name="start_pos" value="[8.0, 5.0]" />
-    <param name="target_pos" value="[0.0, 0.0]" />
-    <param name="target_weight" value="0.2" />
-    <param name="closest_to_source" value="1.0" />
-    <param name="plume_timeout" value="5.0" />
+  <!-- Launch the path visualizer -->
+  <node pkg="gazebo_px4_simulator" type="gazebo_visualizer.py" name="gazebo_path_visualizer" output="screen">
+    <param name="target_pos" value="[0.0, 0.0, 2.0]" />
+    <param name="odor_threshold" value="4.5" />
   </node>
   
+  <!-- Launch the odor heatmap visualizer 
+  <node pkg="gazebo_px4_simulator" type="odor_heatmap_visualizer.py" name="odor_heatmap_visualizer" output="screen">
+    <param name="odor_model_path" value="$(find gazebo_px4_simulator)/odor_sim_assets/hws/" />
+    <param name="heatmap_resolution" value="0.5" />
+    <param name="update_rate" value="2.0" />
+  </node>-->
 </launch>

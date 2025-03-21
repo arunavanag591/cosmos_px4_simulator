@@ -26,13 +26,22 @@ class UnifiedPlumeTrackerNode:
         self.plume_timeout = 10.0  # Seconds before increasing target weight
         self.closest_to_source = 0.5  # Distance threshold to consider target reached
         
+        ## rigolli bounds
+        # self.bounds = [(5, 40), (-0, 8)]  # Default bounds
+        # self.start_pos = np.array([15.0, 6.0])  # Starting position
+        # self.target_pos = np.array([5.0, 4.0])  # Target (odor source) position
+        # self.target_weight = 0.1  # Weight for target direction vs. plume following
+        # self.plume_timeout = 10.0  # Seconds before increasing target weight
+        # self.closest_to_source = 0.5  # Distance threshold to consider target reached
+
+
         # Set up data logging
         self.data_log = []
         self.log_columns = ["timestamp", "x", "y", "z", "yaw", "odor_concentration", 
                            "is_surging", "surge_force", "vx", "vy", "whiff_count"]
         
         # Create output directory if it doesn't exist
-        self.log_dir = os.path.expanduser("~/gazebo_ws/src/gazebo_px4_simulator/plume_tracking_logs")
+        self.log_dir = os.path.expanduser("~/gazebo_ws/src/plume_tracking_logs")
         if not os.path.exists(self.log_dir):
             os.makedirs(self.log_dir)
         
@@ -49,6 +58,7 @@ class UnifiedPlumeTrackerNode:
         
         # Load odor model data
         dirname = rospy.get_param('~odor_model_path', '/home/vbl/gazebo_ws/src/gazebo_px4_simulator/odor_sim_assets/hws/')
+        # dirname = rospy.get_param('~odor_model_path', '/home/vbl/gazebo_ws/src/gazebo_px4_simulator/odor_sim_assets/rigolli/')
         rospy.loginfo(f"Loading odor model data from {dirname}")
         
         try:
@@ -58,7 +68,8 @@ class UnifiedPlumeTrackerNode:
             
             # Initialize the odor predictor
             self.predictor = CosmosFast(
-                fitted_p_heatmap=hmap_data['fitted_heatmap'],
+                fitted_p_heatmap=hmap_data['fitted_heatmap'],   #hws
+                # fitted_p_heatmap=hmap_data['fitted_p_heatmap'], #rigolli
                 xedges=hmap_data['xedges'],
                 yedges=hmap_data['yedges'],
                 fdf=fdf,
