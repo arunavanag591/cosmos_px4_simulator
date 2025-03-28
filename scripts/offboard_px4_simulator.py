@@ -50,9 +50,9 @@ if __name__ == "__main__":
     
     # Send a few setpoints before starting
     setpoint = PoseStamped()
-    setpoint.pose.position.x = 30.0  # Starting position
+    setpoint.pose.position.x = 25.0  # Starting position
     setpoint.pose.position.y = 6.0
-    setpoint.pose.position.z = 1.0
+    setpoint.pose.position.z = 3.0
     setpoint.pose.orientation.w = 1.0
     
     # Send setpoints for 2 seconds before attempting to switch modes
@@ -98,7 +98,7 @@ if __name__ == "__main__":
         # Once armed and in OFFBOARD mode, we let the plume tracker control the drone
         if current_state.armed and current_state.mode == "OFFBOARD":
             # Log status every 5 seconds
-            if int(rospy.Time.now().to_sec()) % 5 == 0:
+            if int(rospy.Time.now().to_sec()) % 60 == 0:
                 rospy.loginfo(f"Drone armed and in OFFBOARD mode. Plume tracker is controlling.")
         
         rate.sleep()

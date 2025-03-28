@@ -45,3 +45,26 @@ Installation procedure:
         ``` bash
         ~/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/worlds/empty.world
         ```
+
+    - To add wind forces to the gazebo-classic environment, add the below lines to the world file 
+
+        ```
+        <plugin name="WindPublisherPlugin" filename="libWindPublisherPlugin.so">
+    	<frameId>world</frameId>
+  		<windVelocityMean>6.0</windVelocityMean>
+  		<windVelocityMax>8.0</windVelocityMax>
+  		<windVelocityVariance>1.0</windVelocityVariance>
+  		<windDirectionMean>1 0 0</windDirectionMean>
+  		<windGustStart>1.0</windGustStart>
+  		<windGustDuration>2.0</windGustDuration>
+  		<gustVelocityMean>8.0</gustVelocityMean>
+  		<gustVelocityVariance>2.0</gustVelocityVariance>
+		</plugin>
+		<sensor name="wind_sensor" type="custom">
+  	    <always_on>1</always_on>
+  	    <update_rate>10</update_rate>
+  	    <plugin name="wind_sensor_plugin" filename="libWindSensorPlugin.so">
+  	    <topic>/drone/wind</topic>
+  	    </plugin>
+		</sensor>
+        ```

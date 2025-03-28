@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- Launch RViz with the plume tracking configuration -->
+  <node pkg="rviz" type="rviz" name="rviz" args="-d $(find gazebo_px4_simulator)/launch/plume_tracking.rviz" />
+  
+  <!-- Launch the plume visualization node -->
+  <node pkg="gazebo_px4_simulator" type="plume_viz_node.py" name="plume_visualization" output="screen">
+    <rosparam param="target_pos">[5.0, 4.0, 3.0]</rosparam>
+    <param name="odor_threshold" value="4.5" />
+  </node>
+  
+  <!-- Launch the path visualizer -->
+  <node pkg="gazebo_px4_simulator" type="gazebo_visualizer.py" name="gazebo_path_visualizer" output="screen">
+    <rosparam param="target_pos">[5.0, 4.0, 3.0]</rosparam>
+    <param name="odor_threshold" value="4.5" />
+  </node>
+  
+  <!-- Launch the odor heatmap visualizer (commented out for now) 
+  <node pkg="gazebo_px4_simulator" type="odor_heatmap_visualizer.py" name="odor_heatmap_visualizer" output="screen">
+    <param name="odor_model_path" value="$(find gazebo_px4_simulator)/odor_sim_assets/hws/" />
+    <param name="heatmap_resolution" value="0.5" />
+    <param name="update_rate" value="2.0" />
+  </node>-->
+</launch>

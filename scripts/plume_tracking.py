@@ -16,8 +16,30 @@ class SurgeCastAgent:
         self.cast_width = cast_width
         self.bounds = bounds
         self.surge_amp_ = surge_amp / (tau_surge * np.exp(-1))
+        
+        # State variables for step-wise tracking
+        self.v = np.zeros(2)          # Current velocity
+        self.b = np.zeros(2)          # Current bias force
+        self.last_hit_time = -np.inf  # Time of last hit
+        self.last_odor = 0            # Previous odor concentration
+        self.hit_occurred = False     # Flag for peak detection
+        self.surge_active = False     # Whether surge is active
+        self.surge_force = 0.0        # Current surge force
+        self.whiff_count = 0          # Count of odor hits
+
+    def reset(self):
+        """Reset the agent's state variables."""
+        self.v = np.zeros(2)
+        self.b = np.zeros(2)
+        self.last_hit_time = -np.inf
+        self.last_odor = 0
+        self.hit_occurred = False
+        self.surge_active = False
+        self.surge_force = 0.0
+        self.whiff_count = 0
 
     def reflect_if_out_of_bounds(self, v: np.ndarray, x: np.ndarray):
+        """Apply reflection at boundaries."""
         if self.bounds is None:
             return v, x
         v_new = v.copy()
@@ -30,7 +52,120 @@ class SurgeCastAgent:
                 v_new[dim] *= -1
                 x_new[dim] = 2*self.bounds[dim][1] - x[dim]
         return v_new, x_new
+    
+    def step(self, x, current_odor, current_time, target_pos, target_weight=0.1, 
+             plume_timeout=5.0, dt=0.01):
+        """
+        Take a single step in the tracking algorithm.
+        
+        Args:
+            x: Current 2D position (x, y)
+            current_odor: Current odor concentration
+            current_time: Current time
+            target_pos: Target (source) position
+            target_weight: Weight for target direction
+            plume_timeout: Time before increasing target weight
+            dt: Time step
+            
+        Returns:
+            dict: Dictionary with updated state information
+                - v: Next velocity vector
+                - hit: Whether a hit was detected
+                - surge_active: Whether surge is active
+                - surge_force: Current surge force
+                - b: Bias force vector
+                - whiff_count: Total whiff count
+        """
+        # Detect odor hits (peaks)
+        hit = False
+        if self.hit_trigger == 'peak':
+            if current_odor >= self.threshold:
+                if current_odor <= self.last_odor and not self.hit_occurred:
+                    # Hit detected!
+                    hit = True
+                    self.hit_occurred = True
+                    self.last_hit_time = current_time
+                    self.whiff_count += 1
+                    self.surge_active = True
+                    
+                self.last_odor = current_odor
+            else:
+                self.last_odor = 0
+                self.hit_occurred = False
+        
+        # Calculate random noise for AR dynamics
+        eta = np.random.normal(0, self.noise, 2)
+        
+        # Calculate time since last hit
+        time_since_hit = current_time - self.last_hit_time
+        
+        # Update surge force if active
+        if self.surge_active:
+            # Calculate surge force with exponential decay
+            surge_elapsed = current_time - self.last_hit_time
+            if surge_elapsed < 5.0:  # Duration of surge behavior
+                self.surge_force = self.surge_amp_ * surge_elapsed * np.exp(-surge_elapsed/self.tau_surge)
+                self.surge_force = min(self.surge_force, 50.0)  # Cap the force
+            else:
+                # End of surge
+                self.surge_active = False
+                self.surge_force = 0.0
+        
+        # Calculate vector to target
+        to_target = target_pos - x
+        dist_to_target = np.linalg.norm(to_target)
+        to_target = to_target / (dist_to_target + 1e-6)  # Normalize
+        
+        # Adjust target weight based on time since last hit
+        current_target_weight = target_weight
+        if time_since_hit > plume_timeout:
+            current_target_weight = min(0.8, 
+                target_weight + 0.1*(time_since_hit - plume_timeout)/plume_timeout)
+        
+        # Calculate bias force based on current state
+        if self.surge_active and self.surge_force > 1.0:
+            # Surge behavior - strong movement toward source
+            surge_direction = np.array([-1.0, -0.05*x[1]])  # Upwind with slight correction
+            surge_direction /= np.linalg.norm(surge_direction)
+            self.b = (1 - current_target_weight)*surge_direction + current_target_weight*to_target
+            self.b *= self.surge_force
+        else:
+            # Casting behavior - oscillating crosswind pattern
+            cast_phase = np.sin(2*np.pi*self.cast_freq*current_time)
+            
+            # Scale casting width based on distance to target
+            dist_factor = min(1.0, dist_to_target/20.0)
+            cast_width = self.cast_width*dist_factor
+            
+            # Create crosswind and upwind components
+            crosswind = np.array([0.0, cast_phase*cast_width])
+            upwind = np.array([-0.5, 0.0])
+            
+            # Combine components with target bias
+            self.b = (1 - current_target_weight)*(upwind + crosswind) + current_target_weight*to_target
+            norm_b = np.linalg.norm(self.b)
+            if norm_b > 0:
+                self.b *= self.bias/norm_b
+        
+        # Update velocity using AR dynamics
+        self.v += (dt/self.tau)*(-self.v + eta + self.b)
+        
+        # Apply boundary reflection
+        self.v, _ = self.reflect_if_out_of_bounds(self.v, x)
+        
+        # Return updated state info
+        return {
+            'v': self.v.copy(),             # Next velocity
+            'hit': hit,                     # Hit detected
+            'surge_active': self.surge_active,  # Surge status
+            'surge_force': self.surge_force,    # Surge force
+            'b': self.b.copy(),             # Bias force
+            'whiff_count': self.whiff_count,    # Total whiff count
+            'time_since_hit': time_since_hit    # Time since last hit
+        }
 
+
+# Original tracking function kept for backward compatibility
 def tracking(predictor, bounds, start_pos, target_pos, surge_agent, 
           target_weight, plume_timeout, closest_to_source, duration):
     dt = 0.005
@@ -65,6 +200,9 @@ def tracking(predictor, bounds, start_pos, target_pos, surge_agent,
     hit_occurred = False
     prev_angle = 0
 
+    # Reset surge agent state for a fresh run
+    surge_agent.reset()
+
     # Initial bias calculation remains same
     to_target = target_pos - x
     to_target /= (np.linalg.norm(to_target) + 1e-6)
@@ -73,65 +211,34 @@ def tracking(predictor, bounds, start_pos, target_pos, surge_agent,
     b *= (surge_agent.bias / np.linalg.norm(b))
 
     for t_ctr in range(n_steps):
+        current_time = t_ctr * dt
         current_odor = predictor.step_update(x[0], x[1], dt)
         odors[t_ctr] = current_odor
 
-        # Original hit detection logic
-        if surge_agent.hit_trigger == 'peak':
-            if current_odor >= surge_agent.threshold:
-                if current_odor <= last_odor and not hit_occurred:
-                    hits[t_ctr] = 1
-                    hit_occurred = True
-                    last_hit_time = t_ctr*dt
-                    remaining_steps = n_steps - t_ctr
-                    ts_ = ts[:remaining_steps] - ts[0]
-                    surge_force = surge_agent.surge_amp_ * ts_ * np.exp(-ts_/surge_agent.tau_surge)
-                    surges[t_ctr:] = np.minimum(surge_force, 50.0)
-                last_odor = current_odor
-            else:
-                last_odor = 0
-                hit_occurred = False
-
         if t_ctr > 0:
-            # Original movement logic
-            eta = np.random.normal(0, surge_agent.noise, 2)
-            time_since_hit = (t_ctr*dt - last_hit_time)
+            # Check if we've reached the target
             to_target = target_pos - x
             dist_to_target = np.linalg.norm(to_target)
-            
             if dist_to_target < closest_to_source:
                 print(f"Target reached at {x}")
                 break
-                
-            to_target /= (dist_to_target + 1e-6)
-
-            current_target_weight = target_weight
-            if time_since_hit > plume_timeout:
-                current_target_weight = min(0.8, 
-                    target_weight + 0.1*(time_since_hit - plume_timeout)/plume_timeout)
-
-            if surges[t_ctr] > 1.0:
-                surge_direction = np.array([-1.0, -0.05*x[1]])
-                surge_direction /= np.linalg.norm(surge_direction)
-                b = (1 - current_target_weight)*surge_direction + current_target_weight*to_target
-                b *= surges[t_ctr]
-            else:
-                cast_freq = 0.5
-                cast_phase = np.sin(2*np.pi*cast_freq*ts[t_ctr])
-                base_cast_width = 1.0
-                dist_factor = min(1.0, dist_to_target/20.0)
-                cast_width = base_cast_width*dist_factor
-
-                crosswind = np.array([0.0, cast_phase*cast_width])
-                upwind = np.array([-0.2, 0.0])
-                b = (1 - current_target_weight)*(upwind + crosswind) + current_target_weight*to_target
-                norm_b = np.linalg.norm(b)
-                if norm_b > 0:
-                    b *= surge_agent.bias/norm_b
-
-            # Update velocity and position
-            v += (dt/surge_agent.tau)*(-v + eta + b)
+            
+            # Take a step using the stepwise agent
+            step_result = surge_agent.step(
+                x, current_odor, current_time, target_pos, 
+                target_weight, plume_timeout, dt
+            )
+            
+            # Update state variables
+            v = step_result['v']
+            hits[t_ctr] = 1 if step_result['hit'] else 0
+            surges[t_ctr] = step_result['surge_force']
+            b = step_result['b']
+            
+            # Update position
             x += v*dt
+            
+            # Recalculate boundaries
             v, x = surge_agent.reflect_if_out_of_bounds(v, x)
 
             # Calculate additional metrics
@@ -153,8 +260,8 @@ def tracking(predictor, bounds, start_pos, target_pos, surge_agent,
             crosswind_distances[t_ctr] = abs(x[1] - target_pos[1])
             upwind_distances[t_ctr] = abs(x[0] - target_pos[0])
             dist_to_targets[t_ctr] = dist_to_target
-            time_since_last_hits[t_ctr] = time_since_hit
-            casting_phases[t_ctr] = cast_phase
+            time_since_last_hits[t_ctr] = step_result['time_since_hit']
+            casting_phases[t_ctr] = np.sin(2*np.pi*surge_agent.cast_freq*current_time)
             
             # Path curvature (for segments of 3 points)
             if t_ctr >= 2:
@@ -217,7 +324,6 @@ def tracking(predictor, bounds, start_pos, target_pos, surge_agent,
         'bias_force_y': bs[:,1]
     })
     
-
     if trajectory_df.iloc[-1]['x'] == 0 and trajectory_df.iloc[-1]['y'] == 0:
             trajectory_df = trajectory_df.iloc[:-1]
     return trajectory_df
