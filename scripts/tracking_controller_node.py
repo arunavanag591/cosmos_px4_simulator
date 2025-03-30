@@ -19,20 +19,20 @@ class UnifiedPlumeTrackerNode:
         rospy.init_node('unified_plume_tracker')
         
         # Load parameters
-        # self.bounds = [(0, 50), (-15, 15)]  # Default bounds
-        # self.start_pos = np.array([25.0, 6.0])  # Starting position
-        # self.target_pos = np.array([0.0, 0.0])  # Target (odor source) position
-        # self.target_weight = 0.3  # Weight for target direction vs. plume following
-        # self.plume_timeout = 10.0  # Seconds before increasing target weight
-        # self.closest_to_source = 0.5  # Distance threshold to consider target reached
-        
-        ## rigolli bounds
-        self.bounds = [(5, 40), (-0, 8)]  # Default bounds
-        self.start_pos = np.array([20.0, 6.0])  # Starting position
-        self.target_pos = np.array([5.0, 4.0])  # Target (odor source) position
-        self.target_weight = 0.3  # Weight for target direction vs. plume following
+        self.bounds = [(0, 50), (-25, 25)]  # Default bounds
+        self.start_pos = np.array([15.0, 6.0])  # Starting position
+        self.target_pos = np.array([0.0, 0.0])  # Target (odor source) position
+        self.target_weight = 0.1  # Weight for target direction vs. plume following
         self.plume_timeout = 10.0  # Seconds before increasing target weight
         self.closest_to_source = 0.5  # Distance threshold to consider target reached
+        
+        ## rigolli bounds
+        # self.bounds = [(5, 40), (-0, 8)]  # Default bounds
+        # self.start_pos = np.array([15.0, 6.0])  # Starting position
+        # self.target_pos = np.array([5.0, 4.0])  # Target (odor source) position
+        # self.target_weight = 0.1  # Weight for target direction vs. plume following
+        # self.plume_timeout = 10.0  # Seconds before increasing target weight
+        # self.closest_to_source = 0.5  # Distance threshold to consider target reached
 
 
         # Set up data logging
@@ -57,8 +57,8 @@ class UnifiedPlumeTrackerNode:
         rospy.loginfo(f"Logging data to: {self.log_filename}")
         
         # Load odor model data
-        # dirname = rospy.get_param('~odor_model_path', '/home/vbl/gazebo_ws/src/gazebo_px4_simulator/odor_sim_assets/hws/')
-        dirname = rospy.get_param('~odor_model_path', '/home/vbl/gazebo_ws/src/gazebo_px4_simulator/odor_sim_assets/rigolli/')
+        dirname = rospy.get_param('~odor_model_path', '/home/vbl/gazebo_ws/src/gazebo_px4_simulator/odor_sim_assets/hws/')
+        # dirname = rospy.get_param('~odor_model_path', '/home/vbl/gazebo_ws/src/gazebo_px4_simulator/odor_sim_assets/rigolli/')
         rospy.loginfo(f"Loading odor model data from {dirname}")
         
         try:
@@ -68,8 +68,8 @@ class UnifiedPlumeTrackerNode:
             
             # Initialize the odor predictor
             self.predictor = CosmosFast(
-                # fitted_p_heatmap=hmap_data['fitted_heatmap'],   #hws
-                fitted_p_heatmap=hmap_data['fitted_p_heatmap'], #rigolli
+                fitted_p_heatmap=hmap_data['fitted_heatmap'],   #hws
+                # fitted_p_heatmap=hmap_data['fitted_p_heatmap'], #rigolli
                 xedges=hmap_data['xedges'],
                 yedges=hmap_data['yedges'],
                 fdf=fdf,
@@ -84,15 +84,15 @@ class UnifiedPlumeTrackerNode:
         
         # Initialize the surge cast agent with stronger surge parameters
         self.surge_agent = SurgeCastAgent(
-            tau=0.3,             # Time constant for velocity dynamics
-            noise=2.0,           # Noise level for random movements
-            bias=0.3,            # Bias weight for movement
-            threshold=4.5,       # Odor threshold for hit detection
-            hit_trigger='peak',  # Type of hit detection
-            surge_amp=2.0,       # INCREASED surge amplitude for stronger movement
-            tau_surge=1.0,       # INCREASED surge time constant for longer surges
-            cast_freq=1.5,       # Casting frequency
-            cast_width=1.5,      # Casting width
+            tau=0.3,            
+            noise=3,           
+            bias=0.1,            # Increase bias for stronger movement
+            threshold=4.5,       # Slightly lower threshold for more hits
+            hit_trigger='peak',  
+            surge_amp=8.0,       # Stronger surge
+            tau_surge=1,       # Shorter surge for more frequent casting
+            cast_freq=1,       # Higher frequency casting
+            cast_width=0.8,      # Much wider casting pattern
             bounds=self.bounds
         )
         
@@ -112,7 +112,7 @@ class UnifiedPlumeTrackerNode:
         self.surge_duration = 5.0  # Duration of surge behavior in seconds
         self.surge_force = 0.0     # Current surge force value
         
-        self.dt = 0.01  # Time step for simulation (100Hz)
+        self.dt = 0.005  # Time step for simulation (100Hz)
         self.is_initialized = False  # Flag to ensure we have valid position data
         self.whiff_count = 0  # Count of detected whiffs
         
@@ -127,7 +127,7 @@ class UnifiedPlumeTrackerNode:
         
         self.drone_state = None
         
-        self.rate = rospy.Rate(100)  # 100Hz control loop
+        self.rate = rospy.Rate(200)  # 100Hz control loop
         rospy.loginfo("Unified plume tracker initialized")
         
         # Set up shutdown handler to ensure log is saved
@@ -260,6 +260,7 @@ class UnifiedPlumeTrackerNode:
         dist_to_target = np.linalg.norm(to_target)
         
         # Check if we've reached the target
+
         if dist_to_target < self.closest_to_source:
             rospy.loginfo(f"Target reached at {x}")
             self.v = np.zeros(2)
@@ -267,13 +268,14 @@ class UnifiedPlumeTrackerNode:
             
             # Log data at target
             self.log_data()
-              
+
             # Add these lines to properly close the node
             rospy.loginfo("Target reached, shutting down node")
             # Ensure all logs are saved
             self.save_log()
             # Request node shutdown
             rospy.signal_shutdown("Target reached")
+
             return
         
         # Normalize target direction
