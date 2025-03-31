@@ -5,6 +5,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import PoseStamped, Point
 from gazebo_px4_simulator.msg import OdorReading
 from std_msgs.msg import ColorRGBA
+import os
 
 class PlumeTrajVisualizer:
     def __init__(self):
@@ -14,11 +15,23 @@ class PlumeTrajVisualizer:
         self.target_pos = rospy.get_param('~target_pos', [0.0, 0.0, 2.0])
         self.odor_threshold = rospy.get_param('~odor_threshold', 4.5)
         
+        # Heatmap parameters
+        self.show_heatmap = rospy.get_param('~show_heatmap', True)
+        self.heatmap_alpha = rospy.get_param('~heatmap_alpha', 0.3)
+        self.model_path = rospy.get_param('~odor_model_path', 
+                          '/home/vbl/gazebo_ws/src/gazebo_px4_simulator/odor_sim_assets/hws/')
+        self.heatmap_update_rate = rospy.get_param('~heatmap_update_rate', 0.2)  # Hz
+        
         # Track points for trajectory
         self.trajectory_points = []
         self.whiff_points = []
         self.last_pose = None
         self.min_point_distance = 0.1  # Minimum distance between trajectory points
+        
+        # Heatmap data
+        self.heatmap = None
+        self.xedges = None
+        self.yedges = None
         
         # Create publishers for visualization markers
         self.marker_pub = rospy.Publisher('visualization_marker_array', MarkerArray, queue_size=10)
@@ -32,7 +45,61 @@ class PlumeTrajVisualizer:
         self.last_odor = 0.0
         self.hit_occurred = False
         
+        # Load heatmap if enabled
+        if self.show_heatmap:
+            self.load_heatmap_data()
+            
+            # Schedule periodic heatmap updates
+            rospy.Timer(rospy.Duration(1.0/self.heatmap_update_rate), self.publish_heatmap)
+        
         rospy.loginfo("Plume trajectory visualizer initialized")
+    
+    def load_heatmap_data(self):
+        """Load heatmap data from file"""
+        try:
+            hmap_path = os.path.join(self.model_path, "hmap.npz")
+            rospy.loginfo(f"Loading heatmap data from: {hmap_path}")
+            
+            # Load the heatmap data
+            hmap_data = np.load(hmap_path)
+            
+            # Get the probability heatmap and edges
+            self.heatmap = hmap_data['fitted_heatmap']  # For HWS dataset
+            # self.heatmap = hmap_data['fitted_p_heatmap']  # For Rigolli dataset (uncomment if needed)
+            self.xedges = hmap_data['xedges']
+            self.yedges = hmap_data['yedges']
+            
+            rospy.loginfo(f"Heatmap loaded with shape: {self.heatmap.shape}")
+            rospy.loginfo(f"X range: {self.xedges[0]} to {self.xedges[-1]}")
+            rospy.loginfo(f"Y range: {self.yedges[0]} to {self.yedges[-1]}")
+            
+        except Exception as e:
+            rospy.logerr(f"Error loading heatmap data: {e}")
+            self.show_heatmap = False
+    
+    def get_color_for_value(self, value, max_value=None):
+        """Map heatmap value to a grayscale color with proper normalization"""
+        if max_value is None:
+            max_value = np.max(self.heatmap)
+            
+        # Normalize value
+        norm_value = min(1.0, max(0.0, value / max_value))
+        
+        # Create a grayscale gradient (dark to light)
+        color = ColorRGBA()
+        
+        # Set all RGB channels to the same value for grayscale
+        # Using an inverted scale (1.0 - norm_value) so higher values are darker
+        gray_value = 1.0 - norm_value * 0.8  # Keep values between 0.2 and 1.0 for visibility
+        
+        color.r = gray_value
+        color.g = gray_value
+        color.b = gray_value
+        
+        # Scale alpha by value for better visibility
+        color.a = self.heatmap_alpha * (0.4 + norm_value * 0.6)  # Stronger alpha for higher values
+        
+        return color
     
     def pose_callback(self, msg):
         """Process drone position updates"""
@@ -235,6 +302,68 @@ class PlumeTrajVisualizer:
                     marker_array.markers.append(arrow_marker)
         
         # Publish all markers
+        self.marker_pub.publish(marker_array)
+    
+    def publish_heatmap(self, event=None):
+        """Publish the static heatmap visualization as cube list"""
+        if not self.show_heatmap or self.heatmap is None:
+            return
+            
+        # Calculate cell dimensions
+        cell_width_x = self.xedges[1] - self.xedges[0] if len(self.xedges) > 1 else 1.0
+        cell_width_y = self.yedges[1] - self.yedges[0] if len(self.yedges) > 1 else 1.0
+        
+        marker_array = MarkerArray()
+        
+        # Create a single cube list marker for efficiency
+        cubes = Marker()
+        cubes.header.frame_id = "map"  # Use 'map' frame to match existing visualization
+        cubes.header.stamp = rospy.Time.now()
+        cubes.ns = "heatmap"
+        cubes.id = 0
+        cubes.type = Marker.CUBE_LIST
+        cubes.action = Marker.ADD
+        
+        # Set scale to cell dimensions
+        cubes.scale.x = cell_width_x * 0.9  # Slightly smaller than cell for visibility
+        cubes.scale.y = cell_width_y * 0.9
+        cubes.scale.z = 0.1  # Height of cells
+        
+        # Set marker properties
+        cubes.pose.orientation.w = 1.0
+        
+        # Use a threshold to only visualize significant concentrations
+        threshold = np.max(self.heatmap) * 0.05  # 5% of max value
+        
+        # Add a grid cell for each heatmap value above threshold
+        for i in range(len(self.xedges) - 1):
+            for j in range(len(self.yedges) - 1):
+                value = self.heatmap[i, j]
+                
+                # Skip low values for performance and clarity
+                if value < threshold:
+                    continue
+                
+                # Calculate cell center
+                x_center = (self.xedges[i] + self.xedges[i+1]) / 2
+                y_center = (self.yedges[j] + self.yedges[j+1]) / 2
+                
+                # Create point for cube center
+                p = Point()
+                p.x = x_center
+                p.y = y_center
+                p.z = 0.05  # Place on ground plane
+                
+                # Add point to cube list
+                cubes.points.append(p)
+                
+                # Add corresponding color
+                cubes.colors.append(self.get_color_for_value(value))
+        
+        # Add cubes to marker array
+        marker_array.markers.append(cubes)
+        
+        # Publish marker array
         self.marker_pub.publish(marker_array)
     
     def run(self):

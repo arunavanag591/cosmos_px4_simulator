@@ -58,6 +58,7 @@ Visualization Manager:
       Name: MarkerArray
       Namespaces:
         direction: true
+        heatmap: true
         start: true
         target: true
         trajectory: true
