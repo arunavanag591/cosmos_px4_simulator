@@ -1,181 +1,277 @@
-#!/usr/bin/env python
+#! /usr/bin/env python
+
 import rospy
-import numpy as np
-import math
 import csv
-import os
-from geometry_msgs.msg import Twist, PoseStamped
+import rospkg
+import numpy as np
+from geometry_msgs.msg import PoseStamped, Twist
 from mavros_msgs.msg import State, PositionTarget
-from gazebo_px4_simulator.msg import OdorReading
+from mavros_msgs.srv import CommandBool, CommandBoolRequest, SetMode, SetModeRequest
+from visualization_msgs.msg import Marker, MarkerArray
+import math
+import time
 import tf.transformations
 
-# Import the required modules directly
-from plume_tracking import SurgeCastAgent
-from plume_sim_fast import CosmosFast
-import pandas as pd
+# For odor detection - assuming a similar implementation to the example
+# You would need to create or import your odor simulator/predictor
+try:
+    from plume_sim_fast import CosmosFast
+    import pandas as pd
+except ImportError:
+    rospy.logwarn("Could not import CosmosFast, will use dummy odor detection")
 
-class UnifiedPlumeTrackerNode:
+class OdorTrackerNode:
     def __init__(self):
-        rospy.init_node('unified_plume_tracker')
+        # Initialize node
+        rospy.init_node("odor_tracking_controller")
         
-        # Load parameters
-        self.bounds = [(0, 50), (-25, 25)]  # Default bounds
-        self.start_pos = np.array([15.0, 6.0])  # Starting position
-        self.target_pos = np.array([0.0, 0.0])  # Target (odor source) position
-        self.target_weight = 0.1  # Weight for target direction vs. plume following
-        self.plume_timeout = 10.0  # Seconds before increasing target weight
-        self.closest_to_source = 0.5  # Distance threshold to consider target reached
+        # State variables
+        self.current_state = State()
+        self.current_pose = PoseStamped()
+        self.current_position = np.array([0.0, 0.0, 0.0])
+        self.current_yaw = 0.0
         
-        ## rigolli bounds
-        # self.bounds = [(5, 40), (-0, 8)]  # Default bounds
-        # self.start_pos = np.array([15.0, 6.0])  # Starting position
-        # self.target_pos = np.array([5.0, 4.0])  # Target (odor source) position
-        # self.target_weight = 0.1  # Weight for target direction vs. plume following
-        # self.plume_timeout = 10.0  # Seconds before increasing target weight
-        # self.closest_to_source = 0.5  # Distance threshold to consider target reached
-
-
-        # Set up data logging
-        self.data_log = []
-        self.log_columns = ["timestamp", "x", "y", "z", "yaw", "odor_concentration", 
-                           "is_surging", "surge_force", "vx", "vy", "whiff_count"]
+        # Flag to track if we've reached the starting position
+        self.reached_start_position = False
         
-        # Create output directory if it doesn't exist
-        self.log_dir = os.path.expanduser("~/gazebo_ws/src/plume_tracking_logs")
-        if not os.path.exists(self.log_dir):
-            os.makedirs(self.log_dir)
+        # Starting position (well inside the plume)
+        self.start_x = 35.0
+        self.start_y = 2.0
         
-        # Create unique log filename with timestamp
-        timestamp = rospy.Time.now().to_sec()
-        self.log_filename = os.path.join(self.log_dir, f"plume_tracking_{int(timestamp)}.csv")
+        # Odor detection variables
+        self.current_odor = 0.0
+        self.last_odor = 0.0
+        self.odor_threshold = 4.5  # From example code
+        self.hit_occurred = False
+        self.last_hit_time = rospy.Time.now().to_sec()
         
-        # Open log file and write header
-        with open(self.log_filename, 'w') as f:
-            writer = csv.writer(f)
-            writer.writerow(self.log_columns)
+        # Behavior parameters
+        self.target_pos = np.array([0.0, 0.0])  # Odor source location (if known)
+        self.closest_to_source = 0.5  # Distance to consider source reached
+        self.is_surging = False
+        self.is_casting = True  # Start with casting behavior
+        self.surge_speed = 3.5  # m/s during surge
+        self.base_speed = 1   # m/s during normal flight
+        self.surge_duration = 2.0  # seconds to continue surge after losing odor
+        self.surge_end_time = 0
         
-        rospy.loginfo(f"Logging data to: {self.log_filename}")
+        # Casting parameters
+        self.cast_base_freq = 0.5   # Base frequency for sine wave (Hz)
+        self.cast_growth_rate = 0.9 # Rate at which amplitude grows per second out of odor
+        self.max_cast_amplitude = 5.0  # Maximum crosswind amplitude
         
-        # Load odor model data
-        dirname = rospy.get_param('~odor_model_path', '/home/vbl/gazebo_ws/src/gazebo_px4_simulator/odor_sim_assets/hws/')
-        # dirname = rospy.get_param('~odor_model_path', '/home/vbl/gazebo_ws/src/gazebo_px4_simulator/odor_sim_assets/rigolli/')
-        rospy.loginfo(f"Loading odor model data from {dirname}")
+        # Altitude to maintain
+        self.altitude = 4.0  # meters
         
+        # Load odor predictor if available
+        self.load_odor_predictor()
+        
+        # ROS subscribers
+        self.state_sub = rospy.Subscriber("mavros/state", State, self.state_callback)
+        self.pose_sub = rospy.Subscriber("mavros/local_position/pose", PoseStamped, self.pose_callback)
+        
+        # ROS publishers
+        self.setpoint_pub = rospy.Publisher("mavros/setpoint_raw/local", PositionTarget, queue_size=10)
+        # Fix: Use TwistStamped instead of Twist for velocity commands
+        from geometry_msgs.msg import TwistStamped
+        self.velocity_pub = rospy.Publisher("mavros/setpoint_velocity/cmd_vel", TwistStamped, queue_size=10)
+        self.marker_pub = rospy.Publisher("visualization_marker_array", MarkerArray, queue_size=10)
+        self.drone_marker_pub = rospy.Publisher("drone_position_marker", Marker, queue_size=10)
+        
+        # Set up service clients
+        rospy.wait_for_service("/mavros/cmd/arming")
+        self.arming_client = rospy.ServiceProxy("/mavros/cmd/arming", CommandBool)
+        
+        rospy.wait_for_service("/mavros/set_mode")
+        self.set_mode_client = rospy.ServiceProxy("/mavros/set_mode", SetMode)
+        
+        # Control rate (20Hz seems common for odor tracking)
+        self.dt = 0.006  # 20 Hz
+        self.rate = rospy.Rate(1.0 / self.dt)
+        
+        # Setup visualization markers
+        self.setup_markers()
+        
+        rospy.loginfo("Odor tracking controller initialized")
+    
+    def load_odor_predictor(self):
+        """Load odor prediction model if available"""
+        self.predictor = None
         try:
+            # Attempt to load the odor model - customize path as needed
+            rospy.loginfo("Attempting to load odor model...")
+            dirname = rospy.get_param('~odor_model_path',
+                                  '/home/vbl/gazebo_ws/src/gazebo_px4_simulator/odor_sim_assets/hws/')
             hmap_data = np.load(str(dirname) + "hmap.npz")
             fdf = pd.read_hdf(str(dirname) + 'whiff.h5')
             fdf_nowhiff = pd.read_hdf(str(dirname) + 'nowhiff.h5')
             
-            # Initialize the odor predictor
             self.predictor = CosmosFast(
-                fitted_p_heatmap=hmap_data['fitted_heatmap'],   #hws
-                # fitted_p_heatmap=hmap_data['fitted_p_heatmap'], #rigolli
+                fitted_p_heatmap=hmap_data['fitted_heatmap'],
                 xedges=hmap_data['xedges'],
                 yedges=hmap_data['yedges'],
                 fdf=fdf,
                 fdf_nowhiff=fdf_nowhiff
             )
             rospy.loginfo("CosmosFast predictor initialized successfully")
-            
         except Exception as e:
-            rospy.logerr(f"Error loading odor model data: {e}")
-            rospy.signal_shutdown("Failed to load odor model data")
-            return
-        
-        # Initialize the surge cast agent with stronger surge parameters
-        self.surge_agent = SurgeCastAgent(
-            tau=0.3,            
-            noise=3,           
-            bias=0.1,            # Increase bias for stronger movement
-            threshold=4.5,       # Slightly lower threshold for more hits
-            hit_trigger='peak',  
-            surge_amp=8.0,       # Stronger surge
-            tau_surge=1,       # Shorter surge for more frequent casting
-            cast_freq=1,       # Higher frequency casting
-            cast_width=0.8,      # Much wider casting pattern
-            bounds=self.bounds
-        )
-        
-        # State variables for tracking
-        self.current_position = np.array([0.0, 0.0, 0.0])  # Current 3D position
-        self.current_yaw = 0.0  # Current yaw angle
-        self.current_odor = 0.0  # Current odor concentration
-        self.last_odor = 0.0  # Previous odor concentration for peak detection
-        self.hit_occurred = False  # Flag for odor peak detection
-        self.last_hit_time = -np.inf  # Time of last odor hit
-        self.v = np.zeros(2)  # Current velocity vector
-        self.b = np.zeros(2)  # Current bias force
-        
-        # Surge variables - using simple approach with direct calculation
-        self.surge_active = False
-        self.surge_start_time = 0
-        self.surge_duration = 5.0  # Duration of surge behavior in seconds
-        self.surge_force = 0.0     # Current surge force value
-        
-        self.dt = 0.005  # Time step for simulation (100Hz)
-        self.is_initialized = False  # Flag to ensure we have valid position data
-        self.whiff_count = 0  # Count of detected whiffs
-        
-        # Publishers
-        self.cmd_vel_pub = rospy.Publisher('mavros/setpoint_velocity/cmd_vel', Twist, queue_size=10)
-        self.setpoint_pub = rospy.Publisher('mavros/setpoint_raw/local', PositionTarget, queue_size=10)
-        self.odor_pub = rospy.Publisher('odor_reading', OdorReading, queue_size=10)
-        
-        # Subscribers
-        self.pose_sub = rospy.Subscriber('mavros/local_position/pose', PoseStamped, self.pose_callback)
-        self.state_sub = rospy.Subscriber('mavros/state', State, self.state_callback)
-        
-        self.drone_state = None
-        
-        self.rate = rospy.Rate(200)  # 100Hz control loop
-        rospy.loginfo("Unified plume tracker initialized")
-        
-        # Set up shutdown handler to ensure log is saved
-        rospy.on_shutdown(self.save_log)
+            rospy.logwarn(f"Could not load odor model: {e}")
+            rospy.logwarn("Will use a simple simulated model instead")
+            self.predictor = self.DummyPredictor()  # Fallback to a simple model
     
-    def save_log(self):
-        """Save any remaining log data when node shuts down"""
-        if self.data_log:
-            rospy.loginfo(f"Saving {len(self.data_log)} log entries to {self.log_filename}")
-            with open(self.log_filename, 'a') as f:
-                writer = csv.writer(f)
-                writer.writerows(self.data_log)
-            self.data_log = []
+    class DummyPredictor:
+        """Simple dummy odor predictor for testing"""
+        def __init__(self):
+            self.source_pos = np.array([0.0, 0.0])  # Odor source at origin
+            self.plume_width = 3.0  # meters
+            self.max_distance = 20.0  # How far odor can be detected
+        
+        def step_update(self, x, y, dt=0.05):
+            """Return simulated odor concentration at position (x, y)"""
+            # Calculate distance to source
+            pos = np.array([x, y])
+            distance = np.linalg.norm(pos - self.source_pos)
+            
+            # If we're too far, no odor
+            if distance > self.max_distance:
+                return 0.0
+            
+            # Calculate concentration based on distance and angle
+            # This creates a downwind plume in +X direction
+            if x > 0 and abs(y) < self.plume_width:
+                # Exponential decay from source
+                concentration = 10.0 * np.exp(-0.1 * distance)
+                # Add some noise
+                concentration *= (1.0 + 0.2 * np.random.randn())
+                return max(0.0, concentration)
+            else:
+                return 0.0
     
-    def log_data(self):
-        """Add current state to data log"""
-        # Create log entry
-        entry = [
-            rospy.Time.now().to_sec(),     # timestamp
-            self.current_position[0],      # x
-            self.current_position[1],      # y
-            self.current_position[2],      # z
-            self.current_yaw,              # yaw
-            self.current_odor,             # odor_concentration
-            self.surge_active,             # is_surging
-            self.surge_force,              # surge_force
-            self.v[0],                     # vx
-            self.v[1],                     # vy
-            self.whiff_count               # whiff_count
-        ]
+    def setup_markers(self):
+        """Setup visualization markers for RViz"""
+        # Create marker array for visualization
+        # self.markers = MarkerArray()
         
-        # Add to in-memory log
-        self.data_log.append(entry)
+        # # Source marker (if known)
+        # source_marker = Marker()
+        # source_marker.header.frame_id = "map"
+        # source_marker.header.stamp = rospy.Time.now()
+        # source_marker.ns = "source"
+        # source_marker.id = 0
+        # source_marker.type = Marker.SPHERE
+        # source_marker.action = Marker.ADD
+        # source_marker.pose.position.x = self.target_pos[0]
+        # source_marker.pose.position.y = self.target_pos[1]
+        # source_marker.pose.position.z = 1.0
+        # source_marker.pose.orientation.w = 1.0
+        # source_marker.scale.x = 0.5
+        # source_marker.scale.y = 0.5
+        # source_marker.scale.z = 0.5
+        # source_marker.color.r = 1.0
+        # source_marker.color.g = 0.0
+        # source_marker.color.b = 0.0
+        # source_marker.color.a = 1.0
+        # self.markers.markers.append(source_marker)
         
-        # Write to file periodically to avoid data loss
-        if len(self.data_log) >= 100:
-            with open(self.log_filename, 'a') as f:
-                writer = csv.writer(f)
-                writer.writerows(self.data_log)
-            self.data_log = []
+        # Start a marker publisher thread
+        import threading
+        marker_thread = threading.Thread(target=self.publish_markers)
+        marker_thread.daemon = True
+        marker_thread.start()
+        
+        # Start drone position marker thread
+        drone_marker_thread = threading.Thread(target=self.publish_drone_marker)
+        drone_marker_thread.daemon = True
+        drone_marker_thread.start()
+    
+    def publish_markers(self):
+        """Thread to publish markers"""
+        while not rospy.is_shutdown():
+            self.marker_pub.publish(self.markers)
+            if hasattr(self, 'whiff_markers') and len(self.whiff_markers.markers) > 0:
+                self.marker_pub.publish(self.whiff_markers)
+            rospy.sleep(0.5)  # 2Hz is enough for markers
+    
+    def publish_drone_marker(self):
+        """Thread to publish drone position marker"""
+        while not rospy.is_shutdown():
+            marker = Marker()
+            marker.header.frame_id = "map"
+            marker.header.stamp = rospy.Time.now()
+            marker.ns = "drone"
+            marker.id = 0
+            marker.type = Marker.SPHERE
+            marker.action = Marker.ADD
+            
+            # Set position to current drone position
+            pos = self.current_position
+            marker.pose.position.x = pos[0]
+            marker.pose.position.y = pos[1]
+            marker.pose.position.z = pos[2]
+            
+            # Default orientation
+            marker.pose.orientation.w = 1.0
+            
+            # Set size and color
+            marker.scale.x = 0.5
+            marker.scale.y = 0.5
+            marker.scale.z = 0.5
+            
+            # Red for surging, blue for casting
+            if self.is_surging:
+                marker.color.r = 1.0
+                marker.color.g = 0.0
+                marker.color.b = 0.0
+            else:
+                marker.color.r = 0.0
+                marker.color.g = 0.0
+                marker.color.b = 1.0
+            marker.color.a = 1.0
+            
+            self.drone_marker_pub.publish(marker)
+            rospy.sleep(0.1)  # 10Hz for drone marker
+
+    def add_whiff_marker(self, x, y, z):
+        """Add a marker for an odor detection point"""
+        # Create whiff markers array if it doesn't exist
+        if not hasattr(self, 'whiff_markers'):
+            self.whiff_markers = MarkerArray()
+        
+        marker = Marker()
+        marker.header.frame_id = "map"
+        marker.header.stamp = rospy.Time.now()
+        marker.ns = "whiffs"
+        marker.id = len(self.whiff_markers.markers)  # Increment ID for each marker
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        marker.pose.position.x = x
+        marker.pose.position.y = y
+        marker.pose.position.z = z
+        marker.pose.orientation.w = 1.0
+        
+        # Set size and color (red for whiff detection)
+        marker.scale.x = 0.3
+        marker.scale.y = 0.3
+        marker.scale.z = 0.3
+        marker.color.r = 1.0
+        marker.color.g = 0.0
+        marker.color.b = 0.0
+        marker.color.a = 1.0
+        
+        self.whiff_markers.markers.append(marker)
+        
+        # Also publish this marker immediately
+        self.marker_pub.publish(self.whiff_markers)
     
     def state_callback(self, msg):
-        """Store the current drone state"""
-        self.drone_state = msg
+        """Callback for drone state messages"""
+        self.current_state = msg
     
     def pose_callback(self, msg):
-        """Process drone position updates and run tracking algorithm"""
-        # Extract 3D position and orientation from message
+        """Callback for drone position messages"""
+        self.current_pose = msg
+        
+        # Extract position
         self.current_position = np.array([
             msg.pose.position.x,
             msg.pose.position.y,
@@ -188,208 +284,304 @@ class UnifiedPlumeTrackerNode:
         _, _, yaw = tf.transformations.euler_from_quaternion(orientation_list)
         self.current_yaw = yaw
         
-        # Set initialized flag once we have a valid position
-        if not self.is_initialized and not np.all(self.current_position == 0):
-            self.is_initialized = True
-            rospy.loginfo(f"Tracker initialized at position: {self.current_position[:2]}")
-        
-        # Only proceed if initialized and drone is in OFFBOARD mode
-        if self.is_initialized and self.drone_state and self.drone_state.mode == "OFFBOARD" and self.drone_state.armed:
-            # Run a single step of the tracking algorithm
+        # If in OFFBOARD mode and armed, run tracking algorithm
+        if self.current_state.mode == "OFFBOARD" and self.current_state.armed:
             self.tracking_step()
     
+    # Flag to track if we've successfully reached the starting position
+    reached_start_position = False
+    
     def tracking_step(self):
-        """Run a single step of the tracking algorithm"""
-        # Get current position and time
-        x = self.current_position[:2]  # 2D position (x, y)
+        """Main tracking algorithm step"""
+        # Skip tracking until we've confirmed reaching the starting position
+        if not self.reached_start_position:
+            # Check if we're at the starting position
+            current_pos = self.current_position
+            dist_to_start = math.sqrt(
+                (current_pos[0] - self.start_x)**2 + 
+                (current_pos[1] - self.start_y)**2
+            )
+            
+            if dist_to_start < 3.0:  # Within 3m of starting position
+                rospy.loginfo(f"Reached starting position. Beginning odor tracking.")
+                self.reached_start_position = True
+            else:
+                # Still moving to starting position - send position commands only
+                takeoff_pose = PositionTarget()
+                takeoff_pose.coordinate_frame = PositionTarget.FRAME_LOCAL_NED
+                takeoff_pose.type_mask = (
+                    PositionTarget.IGNORE_VX + PositionTarget.IGNORE_VY + PositionTarget.IGNORE_VZ +
+                    PositionTarget.IGNORE_AFX + PositionTarget.IGNORE_AFY + PositionTarget.IGNORE_AFZ +
+                    PositionTarget.IGNORE_YAW_RATE
+                )
+                takeoff_pose.position.x = self.start_x
+                takeoff_pose.position.y = self.start_y
+                takeoff_pose.position.z = self.altitude
+                takeoff_pose.yaw = math.pi
+                self.setpoint_pub.publish(takeoff_pose)
+                return
+        
         current_time = rospy.Time.now().to_sec()
         
-        # Get odor at current position
-        self.current_odor = self.predictor.step_update(x[0], x[1], dt=self.dt)
+        # Get current position
+        x, y = self.current_position[0], self.current_position[1]
         
-        # Publish odor reading for visualization
-        odor_msg = OdorReading()
-        odor_msg.header.stamp = rospy.Time.now()
-        odor_msg.concentration = self.current_odor
-        odor_msg.position.x = x[0]
-        odor_msg.position.y = x[1]
-        self.odor_pub.publish(odor_msg)
-        
-        # Detect odor hits (peaks)
-        if self.surge_agent.hit_trigger == 'peak':
-            if self.current_odor >= self.surge_agent.threshold:
-                if self.current_odor <= self.last_odor and not self.hit_occurred:
-                    # Hit detected!
-                    self.whiff_count += 1
-                    rospy.loginfo(f"Hit #{self.whiff_count} detected! Concentration: {self.current_odor:.2f}")
-                    self.hit_occurred = True
-                    
-                    # Start a new surge
-                    self.surge_active = True
-                    self.surge_start_time = current_time
-                    self.last_hit_time = current_time
-                    self.surge_force = 10.0  # Start with strong surge force
-                    
-                    rospy.loginfo("SURGING initiated with force 10.0")
-                
-                self.last_odor = self.current_odor
-            else:
-                self.last_odor = 0
-                self.hit_occurred = False
-        
-        # Calculate control inputs
-        eta = np.random.normal(0, self.surge_agent.noise, 2)
-        time_since_hit = current_time - self.last_hit_time
-        
-        # Check if surge is active
-        if self.surge_active:
-            surge_elapsed = current_time - self.surge_start_time
-            if surge_elapsed < self.surge_duration:
-                # Calculate surge force with exponential decay
-                t = surge_elapsed
-                self.surge_force = self.surge_agent.surge_amp_ * t * np.exp(-t/self.surge_agent.tau_surge)
-                # Keep minimum surge force to maintain behavior
-                self.surge_force = max(self.surge_force, 2.0)
-            else:
-                # End of surge
-                self.surge_active = False
-                self.surge_force = 0.0
-        
-        # Calculate direction to target
-        to_target = self.target_pos - x
-        dist_to_target = np.linalg.norm(to_target)
-        
-        # Check if we've reached the target
-
-        if dist_to_target < self.closest_to_source:
-            rospy.loginfo(f"Target reached at {x}")
-            self.v = np.zeros(2)
-            self.publish_velocity()
-            
-            # Log data at target
-            self.log_data()
-
-            # Add these lines to properly close the node
-            rospy.loginfo("Target reached, shutting down node")
-            # Ensure all logs are saved
-            self.save_log()
-            # Request node shutdown
-            rospy.signal_shutdown("Target reached")
-
-            return
-        
-        # Normalize target direction
-        to_target = to_target / (dist_to_target + 1e-6)
-        
-        # Adjust target weight based on time since last hit
-        current_target_weight = self.target_weight
-        if time_since_hit > self.plume_timeout:
-            current_target_weight = min(0.8, 
-                self.target_weight + 0.1*(time_since_hit - self.plume_timeout)/self.plume_timeout)
-        
-        # Compute bias force based on current state
-        if self.surge_active and self.surge_force > 1.0:
-            # Surge behavior
-            surge_direction = np.array([-1.0, -0.05*x[1]])
-            surge_direction /= np.linalg.norm(surge_direction)
-            self.b = (1 - current_target_weight)*surge_direction + current_target_weight*to_target
-            self.b *= self.surge_force
-            behavior = "SURGING"
+        # Get odor reading from predictor
+        if self.predictor:
+            self.current_odor = self.predictor.step_update(x, y, dt=self.dt)
         else:
-            # Casting behavior
-            cast_freq = 0.5
-            cast_phase = np.sin(2*np.pi*cast_freq*current_time)
-            base_cast_width = 1.0
-            dist_factor = min(1.0, dist_to_target/20.0)
-            cast_width = base_cast_width*dist_factor
-
-            crosswind = np.array([0.0, cast_phase*cast_width])
-            upwind = np.array([-0.2, 0.0])
-            self.b = (1 - current_target_weight)*(upwind + crosswind) + current_target_weight*to_target
-            norm_b = np.linalg.norm(self.b)
-            if norm_b > 0:
-                self.b *= self.surge_agent.bias/norm_b
-            behavior = "CASTING"
+            # Fallback if no predictor is available
+            self.current_odor = 0.0
         
-        # Update velocity using AR dynamics
-        self.v += (self.dt/self.surge_agent.tau)*(-self.v + eta + self.b)
+        # Check if we're in odor
+        currently_in_odor = (self.current_odor >= self.odor_threshold)
         
-        # Apply boundary conditions
-        self.v, _ = self.surge_agent.reflect_if_out_of_bounds(self.v, x)
+        # Check for odor detection
+        if currently_in_odor and not self.hit_occurred:
+            rospy.loginfo(f"Odor detected at concentration {self.current_odor:.2f}")
+            self.add_whiff_marker(x, y, self.current_position[2])
+            self.hit_occurred = True
+            self.last_hit_time = current_time
+            self.is_surging = True
+            self.is_casting = False
+            self.surge_end_time = current_time + self.surge_duration
+        elif not currently_in_odor:
+            self.hit_occurred = False
         
-        # Scale velocity for stronger movement
-        velocity_scale = 1.0
-        if behavior == "SURGING":
-            velocity_scale = 2.0  # Stronger movement during surging
+        # Check if surge time is over
+        if current_time > self.surge_end_time and self.is_surging and not currently_in_odor:
+            rospy.loginfo("Surge time over, switching to casting")
+            self.is_surging = False
+            self.is_casting = True
         
-        # Apply velocity scaling
-        scaled_v = self.v * velocity_scale
+        # Compute velocity commands
+        vx, vy, vz = 0.0, 0.0, 0.0
         
-        # Log current data
-        self.log_data()
-        
-        # Log status periodically
-        if int(current_time * 10) % 10 == 0:  # Log approximately once per second
-            rospy.loginfo(f"Behavior: {behavior}, Whiffs: {self.whiff_count}")
-            rospy.loginfo(f"Position: ({x[0]:.2f}, {x[1]:.2f}), Velocity: ({scaled_v[0]:.2f}, {scaled_v[1]:.2f})")
-            rospy.loginfo(f"Odor concentration: {self.current_odor:.2f}")
-            rospy.loginfo(f"Surge active: {self.surge_active}, Surge force: {self.surge_force:.2f}")
-        
-        # Publish scaled velocity command
-        self.publish_velocity(scaled_v)
-    
-    def publish_velocity(self, velocity=None):
-        """Publish velocity command to move the drone"""
-        if velocity is None:
-            velocity = self.v
+        if self.is_surging:
+            # Surge behavior: move upwind (negative X direction)
+            vx = -self.surge_speed
+            vy = 0.0
+            rospy.loginfo_throttle(1.0, "SURGING")
+        else:
+            # Cast behavior: sinusoidal pattern
+            time_since_hit = current_time - self.last_hit_time
             
-        # Create Twist message with current velocity
-        vel_cmd = Twist()
-        vel_cmd.linear.x = velocity[0]
-        vel_cmd.linear.y = velocity[1]
-        vel_cmd.linear.z = 0.0  # Maintain altitude
+            # Compute crosswind amplitude (grows with time)
+            cast_amp = min(self.max_cast_amplitude, 
+                          self.cast_growth_rate * time_since_hit)
+            
+            # Sinusoidal crosswind movement
+            vy = cast_amp * math.sin(2.0 * math.pi * self.cast_base_freq * time_since_hit)
+            
+            # Keep moving upwind but at lower speed
+            vx = -self.base_speed
+            
+            rospy.loginfo_throttle(1.0, f"CASTING with amplitude {cast_amp:.2f}")
         
-        # Publish velocity command
-        self.cmd_vel_pub.publish(vel_cmd)
+        # Altitude control to maintain target height
+        error_z = self.altitude - self.current_position[2]
+        vz = 0.5 * error_z  # P controller for altitude
+        
+        # Only check if we're close to the source if we've confirmed reaching the starting position
+        if self.reached_start_position:
+            dist_to_source = np.linalg.norm(self.target_pos - self.current_position[:2])
+            if dist_to_source < self.closest_to_source:
+                rospy.loginfo(f"Source reached at {self.current_position[:2]}")
+                vx, vy, vz = 0.0, 0.0, 0.0
+                # Hover at the source
+                self.publish_velocity(0.0, 0.0, 0.0)
+                rospy.signal_shutdown("Source reached successfully")
+                return
+        
+        # Send velocity commands
+        self.publish_velocity(vx, vy, vz)
+    
+    def publish_velocity(self, vx, vy, vz):
+        """Publish velocity commands"""
+        # Create TwistStamped message for velocity
+        from geometry_msgs.msg import TwistStamped
+        vel_cmd = TwistStamped()
+        vel_cmd.header.stamp = rospy.Time.now()
+        vel_cmd.header.frame_id = "base_link"
+        vel_cmd.twist.linear.x = vx
+        vel_cmd.twist.linear.y = vy
+        vel_cmd.twist.linear.z = vz
+        self.velocity_pub.publish(vel_cmd)
         
         # Also publish position target for better PX4 control
-        position_target = PositionTarget()
-        position_target.coordinate_frame = PositionTarget.FRAME_LOCAL_NED
-        position_target.type_mask = PositionTarget.IGNORE_VX + PositionTarget.IGNORE_VY + PositionTarget.IGNORE_VZ + \
-                                  PositionTarget.IGNORE_AFX + PositionTarget.IGNORE_AFY + PositionTarget.IGNORE_AFZ + \
-                                  PositionTarget.IGNORE_YAW_RATE
+        pt = PositionTarget()
+        pt.coordinate_frame = PositionTarget.FRAME_LOCAL_NED
+        pt.type_mask = (
+            PositionTarget.IGNORE_PX + PositionTarget.IGNORE_PY + PositionTarget.IGNORE_PZ +
+            PositionTarget.IGNORE_AFX + PositionTarget.IGNORE_AFY + PositionTarget.IGNORE_AFZ +
+            PositionTarget.IGNORE_YAW
+        )
+        pt.velocity.x = vx
+        pt.velocity.y = vy
+        pt.velocity.z = vz
         
-        # Set look-ahead position based on velocity
-        position_target.position.x = self.current_position[0] + velocity[0] * 0.5  # Look ahead 0.5 seconds
-        position_target.position.y = self.current_position[1] + velocity[1] * 0.5
-        position_target.position.z = 3.0  # Fixed altitude
-        
-        # Calculate yaw to face direction of travel
-        if np.linalg.norm(velocity) > 0.1:
-            position_target.yaw = math.atan2(velocity[1], velocity[0])
+        # Set yaw to face direction of travel
+        speed_xy = math.sqrt(vx*vx + vy*vy)
+        if speed_xy > 0.1:
+            # Calculate desired yaw
+            desired_yaw = math.atan2(vy, vx)
+            pt.yaw_rate = 0.5 * self.angle_difference(desired_yaw, self.current_yaw)
         else:
-            position_target.yaw = 0.0
+            pt.yaw_rate = 0.0
         
-        # Publish position target
-        self.setpoint_pub.publish(position_target)
+        self.setpoint_pub.publish(pt)
+    
+    @staticmethod
+    def angle_difference(a, b):
+        """Calculate the shortest angle difference between two angles"""
+        diff = a - b
+        while diff > math.pi:
+            diff -= 2 * math.pi
+        while diff < -math.pi:
+            diff += 2 * math.pi
+        return diff
+    
+    def takeoff_sequence(self):
+        """Execute initial takeoff sequence"""
+        rospy.loginfo("Beginning takeoff sequence")
+        
+        # First, just reach minimal altitude at current position
+        initial_takeoff = PositionTarget()
+        initial_takeoff.coordinate_frame = PositionTarget.FRAME_LOCAL_NED
+        initial_takeoff.type_mask = (
+            PositionTarget.IGNORE_VX + PositionTarget.IGNORE_VY + PositionTarget.IGNORE_VZ +
+            PositionTarget.IGNORE_AFX + PositionTarget.IGNORE_AFY + PositionTarget.IGNORE_AFZ +
+            PositionTarget.IGNORE_YAW_RATE
+        )
+        # Take off at current XY position first - 
+        # Important: use actual current position instead of 0,0 to avoid
+        # false detection of being at the target immediately
+        current_x = self.current_position[0]
+        current_y = self.current_position[1]
+        
+        # Use a slight offset from zero if we're too close to the origin
+        if abs(current_x) < 0.1 and abs(current_y) < 0.1:
+            current_x = 1.0  # Small offset to avoid being at "source"
+            current_y = 1.0
+        
+        initial_takeoff.position.x = current_x
+        initial_takeoff.position.y = current_y
+        initial_takeoff.position.z = 2  # Minimal altitude to clear ground
+        initial_takeoff.yaw = 0
+        
+        # Only after reaching altitude, move to starting position
+        # Set target position for tracking
+        takeoff_pose = PositionTarget()
+        takeoff_pose.coordinate_frame = PositionTarget.FRAME_LOCAL_NED
+        takeoff_pose.type_mask = (
+            PositionTarget.IGNORE_VX + PositionTarget.IGNORE_VY + PositionTarget.IGNORE_VZ +
+            PositionTarget.IGNORE_AFX + PositionTarget.IGNORE_AFY + PositionTarget.IGNORE_AFZ +
+            PositionTarget.IGNORE_YAW_RATE
+        )
+        takeoff_pose.position.x = self.start_x
+        takeoff_pose.position.y = self.start_y
+        takeoff_pose.position.z = self.altitude
+        takeoff_pose.yaw = math.pi  # Face in negative X direction (toward source)
+        
+        # Send a few setpoints before starting
+        for _ in range(100):
+            if rospy.is_shutdown():
+                break
+            self.setpoint_pub.publish(initial_takeoff)
+            self.rate.sleep()
+        
+        # Set mode to OFFBOARD
+        offb_set_mode = SetModeRequest()
+        offb_set_mode.custom_mode = 'OFFBOARD'
+        
+        # Arm the vehicle
+        arm_cmd = CommandBoolRequest()
+        arm_cmd.value = True
+        
+        last_req = rospy.Time.now()
+        
+        # Keep trying until OFFBOARD and armed
+        while not rospy.is_shutdown() and (not self.current_state.armed or self.current_state.mode != "OFFBOARD"):
+            self.setpoint_pub.publish(initial_takeoff)
+            
+            # Try to set OFFBOARD mode
+            if self.current_state.mode != "OFFBOARD" and (rospy.Time.now() - last_req) > rospy.Duration(1.0):
+                response = self.set_mode_client.call(offb_set_mode)
+                if response.mode_sent:
+                    rospy.loginfo("OFFBOARD enabled")
+                else:
+                    rospy.logwarn("Failed to set OFFBOARD mode")
+                last_req = rospy.Time.now()
+            
+            # Try to arm
+            if not self.current_state.armed and (rospy.Time.now() - last_req) > rospy.Duration(1.0):
+                response = self.arming_client.call(arm_cmd)
+                if response.success:
+                    rospy.loginfo("Vehicle armed")
+                else:
+                    rospy.logwarn("Failed to arm vehicle")
+                last_req = rospy.Time.now()
+            
+            self.rate.sleep()
+        
+        # Wait for basic takeoff altitude to be reached
+        rospy.loginfo("Waiting to reach initial takeoff altitude...")
+        takeoff_start_time = rospy.Time.now()
+        
+        while not rospy.is_shutdown():
+            current_alt = self.current_position[2]
+            error = abs(current_alt - 2.0)  # Initial altitude is 2m
+            
+            if error < 0.3:  # Within 30cm
+                rospy.loginfo(f"Reached initial altitude of 2.0m")
+                break
+                
+            # Timeout after 20 seconds
+            if (rospy.Time.now() - takeoff_start_time) > rospy.Duration(20.0):
+                rospy.logwarn("Timeout waiting for takeoff. Continuing anyway.")
+                break
+            
+            self.setpoint_pub.publish(initial_takeoff)
+            self.rate.sleep()
+            
+        # Now move to the actual starting position
+        rospy.loginfo(f"Moving to starting position ({self.start_x}, {self.start_y}, {self.altitude})")
+        
+        # Send the target position for a while to ensure the controller picks it up
+        for _ in range(100):  # Reduced from 200 to 100
+            if rospy.is_shutdown():
+                break
+            self.setpoint_pub.publish(takeoff_pose)
+            self.rate.sleep()
+        
+        rospy.loginfo("Starting position commands sent. Will begin tracking when we reach the vicinity.")
+        
+        # Don't wait here - the tracking_step function will handle waiting to reach the position
+        # This prevents any premature "source reached" detections
+        # The tracking_step will continue sending position commands until we reach the starting area
+        
+        rospy.loginfo("Takeoff complete, beginning odor tracking")
     
     def run(self):
-        """Main loop for the node"""
-        rospy.loginfo("Starting unified plume tracker")
+        """Main loop"""
+        # Wait for connection to the flight controller
+        while not rospy.is_shutdown() and not self.current_state.connected:
+            rospy.loginfo_throttle(1.0, "Waiting for FCU connection...")
+            self.rate.sleep()
+        
+        rospy.loginfo("Connected to FCU")
+        
+        # Execute takeoff sequence
+        self.takeoff_sequence()
+        
+        # Main control loop
         while not rospy.is_shutdown():
-            # If we're initialized but not moving, start with a small velocity
-            if self.is_initialized and np.linalg.norm(self.v) < 0.1:
-                now = rospy.Time.now().to_sec()
-                cast_phase = np.sin(2*np.pi*0.5*now)
-                # Small initial velocity to start moving
-                self.v = np.array([-0.2, cast_phase * 0.4])  # Increased initial velocity
-                self.publish_velocity()
-            
+            # Main work is done in the callback
             self.rate.sleep()
 
 if __name__ == "__main__":
     try:
-        tracker = UnifiedPlumeTrackerNode()
-        tracker.run()
+        controller = OdorTrackerNode()
+        controller.run()
     except rospy.ROSInterruptException:
         pass

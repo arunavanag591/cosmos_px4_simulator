@@ -50,8 +50,8 @@ if __name__ == "__main__":
     
     # Send a few setpoints before starting
     setpoint = PoseStamped()
-    setpoint.pose.position.x = 20.0  # Starting position
-    setpoint.pose.position.y = 6.0
+    setpoint.pose.position.x = 25.0  # Starting position
+    setpoint.pose.position.y = -2.0
     setpoint.pose.position.z = 3.0
     setpoint.pose.orientation.w = 1.0
     

@@ -5,15 +5,15 @@
   
   <!-- Launch the plume visualization node -->
   <node pkg="gazebo_px4_simulator" type="plume_viz_node.py" name="plume_visualization" output="screen">
-    <rosparam param="target_pos">[5.0, 4.0, 3.0]</rosparam>
+    <rosparam param="target_pos">[0.0, 0.0, 3.0]</rosparam>
     <param name="odor_threshold" value="4.5" />
   </node>
   
-  <!-- Launch the path visualizer -->
+  <!-- Launch the path visualizer 
   <node pkg="gazebo_px4_simulator" type="gazebo_visualizer.py" name="gazebo_path_visualizer" output="screen">
     <rosparam param="target_pos">[5.0, 4.0, 3.0]</rosparam>
     <param name="odor_threshold" value="4.5" />
-  </node>
+  </node>-->
   
   <!-- Launch the odor heatmap visualizer (commented out for now) 
   <node pkg="gazebo_px4_simulator" type="odor_heatmap_visualizer.py" name="odor_heatmap_visualizer" output="screen">
