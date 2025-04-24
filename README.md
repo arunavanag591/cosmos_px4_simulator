@@ -1,5 +1,5 @@
-# Gazebo PX4 Simulator
-PX4 simulator for gazebo-classic and ROS 1.0
+# COSMOS Integrated Gazebo simulation for odor tracking and testing
+Odor simulator for gazebo-classic and ROS 1.0 using PX4 controller
 
 
 Installation procedure:
@@ -25,25 +25,28 @@ Installation procedure:
         ``` bash
         cd ~/PX4-Autopilot/launch/
         roslaunch mavros_posix_sitl.launch
-        rosrun gazebo_px4_simulator gazebo_px4_simulator.py
+        rosrun gazebo_px4_simulator csv_trajectory.py
         
-    - To run it with cosmos odor simulator
+    - Velocity control with cosmos odor simulator
         ``` bash
         cd ~/PX4-Autopilot/launch/
         roslaunch mavros_posix_sitl.launch
-        rosrun gazebo_px4_simulator offboard_px4_simulator.py
-        rosrun gazebo_px4_simulator tracking_controller_node.py
+        rosrun gazebo_px4_simulator surge_cast_vel.py x y (e.g. 40 -8)
+        ```
+    - Position control with cosmos odor simulator
+        ``` bash
+        cd ~/PX4-Autopilot/launch/
+        roslaunch mavros_posix_sitl.launch
+        rosrun gazebo_px4_simulator surge_cast_position.py x y (e.g. 40 -8)
         ```
     - To visualize in rviz:
         ``` bash
-        rosrun rviz rviz -d ~/gazebo_ws/src/gazebo_px4_simulator/launch/plume_tracking.rviz
-
-        rosrun gazebo_px4_simulator plume_viz_node.py _target_pos:="[0.0, 0.0, 2.0]" _odor_threshold:="4.5"
+        roslaunch gazebo_px4_simulator tracking_rviz_visualization.launch 
         ```
 
-    - For checking the wind plugin go to:
+    - Edited world file is [here](/odor_sim_assets/world/mcmillan_airfield.world), that can be replaced with the system world file, usually found in the below directory:
         ``` bash
-        ~/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/worlds/empty.world
+        cd ~/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/worlds/ 
         ```
 
     - To add wind forces to the gazebo-classic environment, add the below lines to the world file 

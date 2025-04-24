@@ -62,8 +62,8 @@ class OdorTrackerNode:
         # Casting parameters
         self.cast_base_freq = 0.5   # Base frequency for sine wave (Hz)
         self.cast_growth_rate = 0.5  # Rate at which amplitude grows per second out of odor
-        self.max_cast_amplitude = 12.0  # Maximum crosswind amplitude
-
+        self.max_cast_amplitude = 2.5  # Maximum crosswind amplitude
+        self.use_normalized_frequency = True 
         # Altitude to maintain
         self.altitude = 4.0  # meters
 
@@ -346,9 +346,20 @@ class OdorTrackerNode:
                 f" sin_val={math.sin(2.0 * math.pi * self.cast_base_freq * time_since_hit):.2f}"
             )
 
-            freq_factor = 1.0 / (1.0 + 0.009 * time_since_hit)
-            current_cast_freq = self.cast_base_freq * freq_factor
-            cast_phase = math.sin(2.0 * math.pi * current_cast_freq * time_since_hit)
+            # freq_factor = 1.0 / (1.0 + 0.009 * time_since_hit)
+            # current_cast_freq = self.cast_base_freq * freq_factor
+            
+            # cast_phase = math.sin(2.0 * math.pi * current_cast_freq * time_since_hit)
+            # frequency_time = time_since_hit * self.cast_time_factor
+
+            if self.use_normalized_frequency:
+                phase_angle = (current_time * self.cast_base_freq) % 1.0  # Normalized to [0,1]
+                cast_phase = math.sin(2.0 * math.pi * phase_angle)
+            else:
+                # Original approach (frequency affects amplitude indirectly)
+                cast_phase = math.sin(2.0 * math.pi * self.cast_base_freq * time_since_hit)
+            # cast_phase = math.sin(2.0 * math.pi * self.cast_base_freq * frequency_time)
+
             vy = cast_amp * cast_phase
             vx = -self.base_speed
             rospy.loginfo_throttle(1.0, f"CASTING with amplitude {cast_amp:.2f}")

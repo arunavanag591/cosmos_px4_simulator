@@ -5,7 +5,7 @@
   
   <!-- Launch the plume visualization node -->
   <node pkg="gazebo_px4_simulator" type="plume_viz_node.py" name="plume_visualization" output="screen">
-    <rosparam param="target_pos">[0.0, 0.0, 3.0]</rosparam>
+    <rosparam param="target_pos">[0.0, 0.0, 2.0]</rosparam>
     <param name="odor_threshold" value="4.5" />
   </node>
   
