@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.0.2)
-project(gazebo_px4_simulator)
+project(cosmos_px4_simulator)
 
 ## Compile as C++11 (or newer if needed)
 add_compile_options(-std=c++11)
@@ -49,8 +49,4 @@ include_directories(
 link_directories(${GAZEBO_LIBRARY_DIRS})
 
 
-## Install headers and proto files
-install(DIRECTORY include/${PROJECT_NAME}/
-  DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION}
-)
 

@@ -1,0 +1,87 @@
+<?xml version="1.0" ?>
+<sdf version="1.5">
+  <world name="default">
+    <scene>
+      <sky>
+        <clouds>
+          <speed>12</speed>
+        </clouds>
+      </sky>
+      <ambient>0.45 0.45 0.45 1</ambient>
+      <background>0.3 0.3 0.3 1</background>
+      <shadows>true</shadows>
+    
+    </scene>
+    <!-- A global light source -->
+    <include>
+      <uri>model://sun</uri>
+    </include>
+    <include>
+      <uri>model://mcmillan_airfield</uri>
+    </include>
+    <!-- Add submarine model as a static element -->
+		<include>
+  		<uri>model://submarine_sinking</uri>
+  		<name>submarine1</name>
+  		<pose>-0.3 0 0.8 0 0 0</pose>
+  		<!--<pose>5 4 0.8 0 0 0</pose>-->
+  		<static>true</static>
+		</include>
+    
+    <spherical_coordinates>
+      <surface_model>EARTH_WGS84</surface_model>
+      <latitude_deg>35.7222542</latitude_deg>
+      <longitude_deg>-120.7665102</longitude_deg>
+      <elevation>280</elevation>
+    </spherical_coordinates>
+   <!-- 
+    <plugin name="WindPublisherPlugin" filename="libWindPublisherPlugin.so">
+    	<frameId>world</frameId>
+  		<windVelocityMean>3.0</windVelocityMean>
+  		<windVelocityMax>3.0</windVelocityMax>
+  		<windVelocityVariance>0.0</windVelocityVariance>
+  		<windDirectionMean>1 0 0</windDirectionMean>
+  		<windGustStart>0.0</windGustStart>
+  		<windGustDuration>0.0</windGustDuration>
+  		<gustVelocityMean>0.0</gustVelocityMean>
+  		<gustVelocityVariance>0.0</gustVelocityVariance>
+		</plugin>
+		
+		
+		<model name="wind_sensor_model">
+    <static>true</static>
+    <pose>0 0 0 0 0 0</pose>
+    <link name="wind_sensor_link">
+      <sensor name="wind_sensor" type="custom">
+        <always_on>1</always_on>
+        	<update_rate>10</update_rate>
+        	<plugin name="wind_sensor_plugin" filename="libWindSensorPlugin.so">
+         	 <topic>/drone/wind</topic>
+        	</plugin>
+      	</sensor>
+    	</link>
+  	</model>
+    -->
+    <physics name='default_physics' default='0' type='ode'>
+      <gravity>0 0 -9.8066</gravity>
+      <ode>
+        <solver>
+          <type>quick</type>
+          <iters>10</iters>
+          <sor>1.3</sor>
+          <use_dynamic_moi_rescaling>0</use_dynamic_moi_rescaling>
+        </solver>
+        <constraints>
+          <cfm>0</cfm>
+          <erp>0.2</erp>
+          <contact_max_correcting_vel>100</contact_max_correcting_vel>
+          <contact_surface_layer>0.001</contact_surface_layer>
+        </constraints>
+      </ode>
+      <max_step_size>0.004</max_step_size>
+      <real_time_factor>1</real_time_factor>
+      <real_time_update_rate>250</real_time_update_rate>
+      <magnetic_field>6.0e-6 2.3e-5 -4.2e-5</magnetic_field>
+    </physics>
+  </world>
+</sdf>
